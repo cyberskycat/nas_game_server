@@ -1,0 +1,50 @@
+services:
+  center:
+    build:
+      context: .
+      dockerfile: center/Dockerfile
+    ports:
+      - "8123:8123"
+    environment:
+      - S3_ENABLED=True
+      - S3_BUCKET=nasgamecenter
+      - S3_PATH_PREFIX=instances
+    # Add volume if persistent DB needed, but current center uses in-memory for some parts.
+    # However, game_saves is mapped to /tmp/game_saves in center code too.
+    volumes:
+      - /tmp/game_saves:/tmp/game_saves
+    restart: unless-stopped
+
+  agent1:
+    build:
+      context: .
+      dockerfile: edge_agent/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/edge_agent_data:/tmp/edge_agent_data
+      - ./agent1_data:/app/data
+      - /tmp/game_saves:/tmp/game_saves
+    ports:
+      - "8001:8001"
+    environment:
+      - CENTER_URL=http://center:8123
+    depends_on:
+      - center
+    restart: unless-stopped
+
+  agent2:
+    build:
+      context: .
+      dockerfile: edge_agent/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/edge_agent_data:/tmp/edge_agent_data
+      - ./agent2_data:/app/data
+      - /tmp/game_saves:/tmp/game_saves
+    ports:
+      - "8002:8001"
+    environment:
+      - CENTER_URL=http://center:8123
+    depends_on:
+      - center
+    restart: unless-stopped

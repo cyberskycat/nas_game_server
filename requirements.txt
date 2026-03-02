@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+requests
+psutil
+boto3
+sqlalchemy
+databases[sqlite]
+aiosqlite
