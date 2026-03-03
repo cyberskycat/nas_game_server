@@ -22,6 +22,14 @@ const App: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
 
+  const openDeployModal = (nodeId?: string) => {
+    form.resetFields();
+    if (nodeId) {
+      form.setFieldsValue({ node_id: nodeId });
+    }
+    setIsModalOpen(true);
+  };
+
   const fetchData = async () => {
     try {
       const [nodesData, instancesData] = await Promise.all([
@@ -45,7 +53,7 @@ const App: React.FC = () => {
 
   const handleDeploy = async (values: any) => {
     try {
-      await deployGame(values.game_type, values.owner_id, values.save_path);
+      await deployGame(values.game_type, values.owner_id, values.save_path, values.node_id);
       message.success('Deployment queued');
       setIsModalOpen(false);
       form.resetFields();
@@ -72,6 +80,17 @@ const App: React.FC = () => {
     { title: 'CPU Load', dataIndex: 'load_avg', key: 'load_avg', render: (val: number) => <Progress percent={Math.round((val || 0) * 100)} size="small" strokeColor="#1890ff" /> },
     { title: 'Instances', dataIndex: 'running_instances', key: 'running_instances' },
     { title: 'Last Seen', dataIndex: 'last_seen', key: 'last_seen', render: (ts: string) => new Date(ts).toLocaleTimeString() },
+    { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
+      <Button 
+        type="link" 
+        size="small" 
+        disabled={record.status !== 'ONLINE'} 
+        icon={<Plus size={14} />} 
+        onClick={() => openDeployModal(record.id)}
+      >
+        Deploy
+      </Button>
+    )},
   ];
 
   const instanceColumns = [
@@ -111,7 +130,7 @@ const App: React.FC = () => {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <Title level={2} style={{ margin: 0 }}>Cluster Overview</Title>
-              <Button type="primary" icon={<Plus size={16} />} onClick={() => setIsModalOpen(true)}>Deploy New Game</Button>
+              <Button type="primary" icon={<Plus size={16} />} onClick={() => openDeployModal()}>Deploy New Game</Button>
             </div>
             
             <Row gutter={[16, 16]}>
@@ -135,7 +154,17 @@ const App: React.FC = () => {
       <Modal title="Deploy New Game Instance" open={isModalOpen} onCancel={() => setIsModalOpen(false)} onOk={() => form.submit()} okText="Deploy" className="glass-card">
         <Form form={form} layout="vertical" onFinish={handleDeploy} preserve={false}>
           <Form.Item name="game_type" label="Game Type" rules={[{ required: true }]}>
-            <Select options={[{ value: 'minecraft', label: 'Minecraft (Java Paper)' }, { value: 'nginx', label: 'Nginx (Static/Web)' }]} />
+            <Select placeholder="Pick a game engine" options={[{ value: 'minecraft', label: 'Minecraft (Java Paper)' }, { value: 'nginx', label: 'Nginx (Static/Web)' }]} />
+          </Form.Item>
+          <Form.Item name="node_id" label="Target Node (Optional)">
+            <Select 
+              allowClear 
+              placeholder="Automatic Selection" 
+              options={nodes.filter(n => n.status === 'ONLINE').map(n => ({ 
+                value: n.id, 
+                label: `${n.hostname} (${n.ip}) - Load: ${Math.round((n.load_avg || 0) * 100)}%` 
+              }))} 
+            />
           </Form.Item>
           <Form.Item name="owner_id" label="Owner ID" rules={[{ required: true }]} initialValue="local_user">
             <Input />

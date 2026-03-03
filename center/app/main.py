@@ -52,15 +52,24 @@ async def update_node_status(
 
 @api_router.post("/games/deploy")
 async def deploy_game(fmt: schemas.DeployRequest, db: Session = Depends(database.get_db)):
-    nodes = repository.get_nodes(db)
-    online_nodes = [n for n in nodes if n.status == "ONLINE"]
-    if not online_nodes:
-        raise HTTPException(status_code=503, detail="No available nodes")
+    node_id = fmt.node_id
     
-    # Sort online nodes by last_seen (descending)
-    online_nodes.sort(key=lambda n: n.last_seen, reverse=True)
-    target_node = online_nodes[0]
-    node_id = target_node.id
+    if node_id:
+        db_node = repository.get_node(db, node_id)
+        if not db_node:
+            raise HTTPException(status_code=404, detail="Selected node not found")
+        if db_node.status != "ONLINE":
+            raise HTTPException(status_code=503, detail="Selected node is not ONLINE")
+    else:
+        nodes = repository.get_nodes(db)
+        online_nodes = [n for n in nodes if n.status == "ONLINE"]
+        if not online_nodes:
+            raise HTTPException(status_code=503, detail="No available nodes")
+        
+        # Sort online nodes by last_seen (descending)
+        online_nodes.sort(key=lambda n: n.last_seen, reverse=True)
+        target_node = online_nodes[0]
+        node_id = target_node.id
     
     instance_id = str(uuid.uuid4())
     

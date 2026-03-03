@@ -14,11 +14,12 @@ export const getInstances = async () => {
   return response.data;
 };
 
-export const deployGame = async (gameType: string, ownerId: string, savePath?: string) => {
+export const deployGame = async (gameType: string, ownerId: string, savePath?: string, nodeId?: string) => {
   const response = await api.post('/games/deploy', {
     game_type: gameType,
     owner_id: ownerId,
-    save_path: savePath
+    save_path: savePath,
+    node_id: nodeId
   });
   return response.data;
 };

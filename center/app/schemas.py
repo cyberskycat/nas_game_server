@@ -26,7 +26,7 @@ class InstanceBase(BaseModel):
     save_path: Optional[str] = None
 
 class DeployRequest(InstanceBase):
-    pass
+    node_id: Optional[str] = None
 
 class Instance(InstanceBase):
     id: str
