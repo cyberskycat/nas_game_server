@@ -19,6 +19,8 @@ def create_or_update_node(db: Session, node: schemas.NodeRegister):
         db_node.resources = node.resources
         db_node.status = "ONLINE"
         db_node.last_seen = datetime.utcnow()
+        if node.public_key:
+            db_node.public_key = node.public_key
     else:
         db_node = models.Node(
             id=node_id,
@@ -26,7 +28,8 @@ def create_or_update_node(db: Session, node: schemas.NodeRegister):
             ip=node.ip,
             resources=node.resources,
             status="ONLINE",
-            last_seen=datetime.utcnow()
+            last_seen=datetime.utcnow(),
+            public_key=node.public_key
         )
         db.add(db_node)
     

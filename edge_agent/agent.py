@@ -25,6 +25,11 @@ except ImportError:
         download_s3_zip = None
         upload_s3_zip = None
 
+try:
+    from . import crypto_utils
+except ImportError:
+    import crypto_utils
+
 CENTER_URL = os.getenv("CENTER_URL", "http://localhost:8123")
 NODE_ID_FILE = "/app/data/node_id.txt"
 CURRENT_NODE_ID = None
@@ -38,14 +43,12 @@ if os.path.exists(ui_path):
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 def get_node_id():
-    if os.path.exists(NODE_ID_FILE):
-        with open(NODE_ID_FILE, "r") as f:
-            return f.read().strip()
-    return None
+    # Now derived from crypto keys
+    return crypto_utils.get_node_id_from_pubkey()
 
 def save_node_id(node_id):
-    with open(NODE_ID_FILE, "w") as f:
-        f.write(node_id)
+    # No longer needed as ID is derived, but keep for compatibility if needed
+    pass
 
 def get_system_stats():
     return {
@@ -92,29 +95,32 @@ async def get_status():
 app.include_router(api_router)
 
 def register():
+    crypto_utils.ensure_keys_exist()
     node_id = get_node_id()
     hostname = socket.gethostname()
-    # Try to get IP from environment variable first, fallback to socket
     ip = os.getenv("AGENT_IP")
     if not ip:
-        try:
-            ip = socket.gethostbyname(hostname)
-        except:
-            ip = "127.0.0.1"
+        try: ip = socket.gethostbyname(hostname)
+        except: ip = "127.0.0.1"
             
     stats = get_system_stats()
-    payload = {"hostname": hostname, "ip": ip, "resources": stats, "node_id": node_id}
+    public_key = crypto_utils.get_public_key_pem()
+    
+    payload = {
+        "hostname": hostname, 
+        "ip": ip, 
+        "resources": stats, 
+        "node_id": node_id,
+        "public_key": public_key
+    }
     try:
-        print(f"Registering node to {CENTER_URL} with IP: {ip}...")
+        print(f"Registering node [{node_id}] to {CENTER_URL}...")
         resp = requests.post(f"{CENTER_URL}/api/nodes/register", json=payload)
         resp.raise_for_status()
-        data = resp.json()
-        new_node_id = data["id"]
-        if not node_id: save_node_id(new_node_id)
-        return new_node_id
+        return node_id
     except Exception as e:
         print(f"Registration failed: {e}")
-        return None
+        return node_id
 
 def get_running_instances_count():
     try:
@@ -336,12 +342,23 @@ def heartbeat_loop():
                 print(f"Registered with Node ID: {CURRENT_NODE_ID}")
             
             if CURRENT_NODE_ID:
+                payload = {
+                    "load_avg": psutil.getloadavg()[0] if hasattr(psutil, "getloadavg") else 0.0, 
+                    "running_instances": get_running_instances_count(),
+                    "timestamp": int(time.time())
+                }
+                
+                # Sign the heartbeat payload
+                signature, timestamp = crypto_utils.sign_payload(payload)
+                headers = {
+                    "X-Signature": signature,
+                    "X-Timestamp": str(timestamp)
+                }
+                
                 resp = requests.post(
                     f"{CENTER_URL}/api/nodes/{CURRENT_NODE_ID}/heartbeat", 
-                    json={
-                        "load_avg": psutil.getloadavg()[0] if hasattr(psutil, "getloadavg") else 0.0, 
-                        "running_instances": get_running_instances_count()
-                    },
+                    json=payload,
+                    headers=headers,
                     timeout=5
                 )
                 if resp.status_code == 404: 

@@ -15,6 +15,7 @@ class Node(Base):
     last_seen = Column(DateTime, default=datetime.utcnow)
     running_instances = Column(Integer, default=0)
     load_avg = Column(Float, default=0.0)
+    public_key = Column(String, nullable=True)
 
 class Instance(Base):
     __tablename__ = "instances"

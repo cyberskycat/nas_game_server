@@ -9,6 +9,7 @@ class NodeBase(BaseModel):
 
 class NodeRegister(NodeBase):
     node_id: str | None = None
+    public_key: str | None = None
 
 class Node(NodeBase):
     id: str
@@ -16,6 +17,7 @@ class Node(NodeBase):
     last_seen: datetime
     running_instances: int
     load_avg: float
+    public_key: Optional[str] = None
 
     class Config:
         from_attributes = True

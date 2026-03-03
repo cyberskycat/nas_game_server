@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Body, APIRouter, Depends
+from fastapi import FastAPI, HTTPException, Body, APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 from typing import List, Dict, Optional
 import uuid
@@ -6,7 +6,7 @@ from datetime import datetime
 import os
 
 from fastapi.staticfiles import StaticFiles
-from . import schemas, repository, database
+from . import schemas, repository, database, crypto_utils
 
 app = FastAPI(title="Game Server Edge Platform - Center")
 api_router = APIRouter(prefix="/api")
@@ -18,19 +18,50 @@ def on_startup():
 
 @api_router.post("/nodes/register", response_model=schemas.Node)
 async def register_node(data: schemas.NodeRegister, db: Session = Depends(database.get_db)):
+    if data.public_key:
+        # Verify node_id matches public_key derivation
+        from cryptography.hazmat.primitives import hashes, serialization
+        import base64
+        try:
+            public_key_bytes = data.public_key.encode('utf-8')
+            digest = hashes.Hash(hashes.SHA256())
+            digest.update(public_key_bytes)
+            fingerprint = digest.finalize()
+            derived_id = base64.urlsafe_b64encode(fingerprint[:16]).decode('utf-8').rstrip('=')
+            
+            if data.node_id and data.node_id != derived_id:
+                raise HTTPException(status_code=400, detail="Invalid node_id for provided public_key")
+            data.node_id = derived_id
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid public_key format: {e}")
+
     db_node = repository.create_or_update_node(db, data)
     return db_node
 
 @api_router.post("/nodes/{node_id}/heartbeat")
 async def heartbeat(
     node_id: str, 
-    load_avg: float = Body(0.0, embed=True),
-    running_instances: int = Body(0, embed=True),
+    payload: Dict = Body(...),
+    x_signature: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None),
     db: Session = Depends(database.get_db)
 ):
     db_node = repository.get_node(db, node_id)
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
+    
+    # Signature verification
+    if db_node.public_key:
+        if not x_signature:
+            raise HTTPException(status_code=401, detail="Missing X-Signature header")
+        
+        # Verify signature
+        is_valid, msg = crypto_utils.verify_signature(payload, x_signature, db_node.public_key)
+        if not is_valid:
+            raise HTTPException(status_code=401, detail=f"Signature verification failed: {msg}")
+
+    load_avg = payload.get("load_avg", 0.0)
+    running_instances = payload.get("running_instances", 0)
     
     repository.update_node_heartbeat(db, node_id, load_avg, running_instances)
     tasks = repository.get_pending_tasks(db, node_id)
@@ -40,13 +71,22 @@ async def heartbeat(
 @api_router.post("/nodes/{node_id}/status")
 async def update_node_status(
     node_id: str,
-    status: str = Body(..., embed=True),
+    payload: Dict = Body(...),
+    x_signature: Optional[str] = Header(None),
     db: Session = Depends(database.get_db)
 ):
     db_node = repository.get_node(db, node_id)
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     
+    if db_node.public_key:
+        if not x_signature:
+            raise HTTPException(status_code=401, detail="Missing X-Signature header")
+        is_valid, msg = crypto_utils.verify_signature(payload, x_signature, db_node.public_key)
+        if not is_valid:
+            raise HTTPException(status_code=401, detail=f"Signature verification failed: {msg}")
+
+    status = payload.get("status", "OFFLINE")
     repository.update_node_status(db, node_id, status)
     return {"status": "UPDATED"}
 
