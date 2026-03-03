@@ -94,15 +94,22 @@ app.include_router(api_router)
 def register():
     node_id = get_node_id()
     hostname = socket.gethostname()
-    ip = socket.gethostbyname(hostname)
+    # Try to get IP from environment variable first, fallback to socket
+    ip = os.getenv("AGENT_IP")
+    if not ip:
+        try:
+            ip = socket.gethostbyname(hostname)
+        except:
+            ip = "127.0.0.1"
+            
     stats = get_system_stats()
     payload = {"hostname": hostname, "ip": ip, "resources": stats, "node_id": node_id}
     try:
-        print(f"Registering node to {CENTER_URL}...")
+        print(f"Registering node to {CENTER_URL} with IP: {ip}...")
         resp = requests.post(f"{CENTER_URL}/api/nodes/register", json=payload)
         resp.raise_for_status()
         data = resp.json()
-        new_node_id = data["id"] # Center refactored to returns id
+        new_node_id = data["id"]
         if not node_id: save_node_id(new_node_id)
         return new_node_id
     except Exception as e:
