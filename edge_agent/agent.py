@@ -12,6 +12,7 @@ import zipfile
 import threading
 from fastapi import FastAPI, APIRouter
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import uvicorn
 
 from . import database, repository
@@ -51,11 +52,39 @@ def save_node_id(node_id):
     pass
 
 def get_system_stats():
+    db = database.get_db()
+    try:
+        max_instances = int(repository.get_config(db, "max_game_instances", str(os.getenv("MAX_GAME_INSTANCES", "3"))))
+    finally:
+        db.close()
+        
     return {
         "cpu_cores": psutil.cpu_count(),
         "ram_gb": round(psutil.virtual_memory().total / (1024**3), 2),
-        "ram_usage": psutil.virtual_memory().percent
+        "ram_usage": psutil.virtual_memory().percent,
+        "max_game_instances": max_instances
     }
+
+class ConfigUpdate(BaseModel):
+    max_game_instances: int
+
+@api_router.get("/config")
+async def get_config():
+    db = database.get_db()
+    try:
+        max_instances = int(repository.get_config(db, "max_game_instances", str(os.getenv("MAX_GAME_INSTANCES", "3"))))
+        return {"max_game_instances": max_instances}
+    finally:
+        db.close()
+
+@api_router.put("/config")
+async def update_config(config: ConfigUpdate):
+    db = database.get_db()
+    try:
+        repository.set_config(db, "max_game_instances", str(config.max_game_instances))
+        return {"max_game_instances": config.max_game_instances}
+    finally:
+        db.close()
 
 @api_router.get("/status")
 async def get_status():
@@ -124,10 +153,15 @@ def register():
 
 def get_running_instances_count():
     try:
-        result = subprocess.run(["docker", "ps", "--format", "{{.Names}}", "--filter", "status=running"], capture_output=True, text=True, check=True)
-        names = result.stdout.strip().split("\n")
-        return len([n for n in names if n.strip().startswith("game-")])
-    except: return 0
+        db = database.get_db()
+        try:
+            instances = repository.get_local_instances(db)
+            return sum(1 for i in instances if i.status in ["RUNNING", "PROVISIONING"])
+        finally:
+            db.close()
+    except Exception as e: 
+        print(f"Error getting running count: {e}")
+        return 0
 
 def update_center_status(instance_id, status, details=None):
     try:
@@ -237,20 +271,37 @@ def setup_minecraft_eula(local_volume):
     if not os.path.exists(eula_path):
         with open(eula_path, "w") as f: f.write("eula=true\n")
 
+deploy_lock = threading.Lock()
+
 def deploy_container(payload):
     global CURRENT_NODE_ID
     instance_id, game_type, env_vars, save_path = payload["instance_id"], payload["game_type"], payload.get("env", {}), payload.get("save_path", "")
     
-    # Persist locally first
-    db = database.get_db()
-    repository.create_or_update_instance(db, instance_id, game_type, "PROVISIONING", save_path)
-    db.close()
+    with deploy_lock:
+        db = database.get_db()
+        max_instances = int(repository.get_config(db, "max_game_instances", str(os.getenv("MAX_GAME_INSTANCES", "3"))))
+        running_count = get_running_instances_count()
+        if running_count >= max_instances:
+            print(f"Cannot deploy, reached max instance limit: {max_instances}")
+            update_center_status(instance_id, "FAILED", details="Reached max instance limit")
+            db.close()
+            return False
+
+        # Persist locally first
+        repository.create_or_update_instance(db, instance_id, game_type, "PROVISIONING", save_path)
+        db.close()
+
+    def set_failed(details=None):
+        db = database.get_db()
+        repository.create_or_update_instance(db, instance_id, game_type, "FAILED", save_path)
+        db.close()
+        update_center_status(instance_id, "FAILED", details=details)
 
     image = "eclipse-temurin:21-jre-jammy" if game_type == "minecraft" else "nginx:alpine"
     local_volume = f"/tmp/edge_agent_data/{CURRENT_NODE_ID}/{instance_id}"
     if save_path:
         if not sync_save(save_path, local_volume, "download"):
-            update_center_status(instance_id, "FAILED", details="S3 backup sync failed")
+            set_failed("S3 backup sync failed")
             return False
     
     jar_file = None
@@ -263,7 +314,7 @@ def deploy_container(payload):
             if jar_name: jar_file = os.path.join(local_volume, jar_name)
         
         if not jar_file:
-            update_center_status(instance_id, "FAILED", details="No Minecraft JAR found or downloaded")
+            set_failed("No Minecraft JAR found or downloaded")
             return False
             
         rel_jar_path = os.path.relpath(jar_file, local_volume)
@@ -292,8 +343,9 @@ def deploy_container(payload):
         db.close()
         update_center_status(instance_id, "RUNNING", details=port_details)
         return True
-    except:
-        update_center_status(instance_id, "FAILED")
+    except Exception as e:
+        print(f"Failed to deploy container: {e}")
+        set_failed("Failed to run docker container")
         return False
 
 def stop_container(payload):
@@ -345,6 +397,7 @@ def heartbeat_loop():
                 payload = {
                     "load_avg": psutil.getloadavg()[0] if hasattr(psutil, "getloadavg") else 0.0, 
                     "running_instances": get_running_instances_count(),
+                    "resources": get_system_stats(),
                     "timestamp": int(time.time())
                 }
                 

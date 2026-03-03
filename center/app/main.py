@@ -62,8 +62,9 @@ async def heartbeat(
 
     load_avg = payload.get("load_avg", 0.0)
     running_instances = payload.get("running_instances", 0)
+    resources = payload.get("resources")
     
-    repository.update_node_heartbeat(db, node_id, load_avg, running_instances)
+    repository.update_node_heartbeat(db, node_id, load_avg, running_instances, resources)
     tasks = repository.get_pending_tasks(db, node_id)
     
     return {"status": "OK", "tasks": [schemas.Task.from_orm(t) for t in tasks]}
@@ -94,21 +95,38 @@ async def update_node_status(
 async def deploy_game(fmt: schemas.DeployRequest, db: Session = Depends(database.get_db)):
     node_id = fmt.node_id
     
+    def can_deploy(n):
+        max_instances = 3
+        if n.resources and "max_game_instances" in n.resources:
+            max_instances = int(n.resources["max_game_instances"])
+        active_count = repository.get_active_instance_count(db, n.id)
+        return active_count < max_instances, active_count
+
     if node_id:
         db_node = repository.get_node(db, node_id)
         if not db_node:
             raise HTTPException(status_code=404, detail="Selected node not found")
         if db_node.status != "ONLINE":
             raise HTTPException(status_code=503, detail="Selected node is not ONLINE")
+            
+        ok, _ = can_deploy(db_node)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Selected node has reached max instance limit")
     else:
         nodes = repository.get_nodes(db)
         online_nodes = [n for n in nodes if n.status == "ONLINE"]
-        if not online_nodes:
-            raise HTTPException(status_code=503, detail="No available nodes")
+        available_nodes = []
+        for n in online_nodes:
+            ok, active_count = can_deploy(n)
+            if ok:
+                available_nodes.append((n, active_count))
+                
+        if not available_nodes:
+            raise HTTPException(status_code=503, detail="No available nodes with capacity")
         
-        # Sort online nodes by last_seen (descending)
-        online_nodes.sort(key=lambda n: n.last_seen, reverse=True)
-        target_node = online_nodes[0]
+        # Sort available nodes by active_count to load balance
+        available_nodes.sort(key=lambda x: x[1])
+        target_node = available_nodes[0][0]
         node_id = target_node.id
     
     instance_id = str(uuid.uuid4())

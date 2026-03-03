@@ -78,7 +78,10 @@ const App: React.FC = () => {
     { title: 'Node Name', dataIndex: 'hostname', key: 'hostname' },
     { title: 'IP', dataIndex: 'ip', key: 'ip' },
     { title: 'CPU Load', dataIndex: 'load_avg', key: 'load_avg', render: (val: number) => <Progress percent={Math.round((val || 0) * 100)} size="small" strokeColor="#1890ff" /> },
-    { title: 'Instances', dataIndex: 'running_instances', key: 'running_instances' },
+    { title: 'Instances / Max', dataIndex: 'running_instances', key: 'running_instances', render: (val: number, record: any) => {
+      const max = record.resources?.max_game_instances || 3;
+      return `${val} / ${max}`;
+    }},
     { title: 'Last Seen', dataIndex: 'last_seen', key: 'last_seen', render: (ts: string) => new Date(ts).toLocaleTimeString() },
     { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
       <Button 
@@ -96,7 +99,10 @@ const App: React.FC = () => {
   const instanceColumns = [
     { title: 'Game', dataIndex: 'game_type', key: 'game_type', render: (val: string) => <Tag color="blue">{val.toUpperCase()}</Tag> },
     { title: 'Instance ID', dataIndex: 'id', key: 'id', ellipsis: true },
-    { title: 'Node', dataIndex: 'node_id', key: 'node_id', ellipsis: true },
+    { title: 'Node', dataIndex: 'node_id', key: 'node_id', ellipsis: true, render: (nodeId: string) => {
+      const node = nodes.find(n => n.id === nodeId);
+      return node ? `${node.hostname} (${node.ip})` : nodeId;
+    }},
     { title: 'Status', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={status === 'RUNNING' ? 'green' : 'orange'}>{status}</Tag> },
     { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
       <Button type="link" danger size="small" onClick={() => handleStop(record.id)}>Stop</Button>

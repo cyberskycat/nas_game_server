@@ -45,13 +45,15 @@ def update_node_status(db: Session, node_id: str, status: str):
         db.refresh(db_node)
     return db_node
 
-def update_node_heartbeat(db: Session, node_id: str, load_avg: float, running_instances: int):
+def update_node_heartbeat(db: Session, node_id: str, load_avg: float, running_instances: int, resources: dict = None):
     db_node = db.query(models.Node).filter(models.Node.id == node_id).first()
     if db_node:
         db_node.status = "ONLINE" # Ensure it's ONLINE on heartbeat
         db_node.last_seen = datetime.utcnow()
         db_node.load_avg = load_avg
         db_node.running_instances = running_instances
+        if resources:
+            db_node.resources = resources
         db.commit()
         db.refresh(db_node)
     return db_node
@@ -72,6 +74,12 @@ def create_instance(db: Session, instance_id: str, node_id: str, game_type: str,
 
 def get_instance(db: Session, instance_id: str):
     return db.query(models.Instance).filter(models.Instance.id == instance_id).first()
+
+def get_active_instance_count(db: Session, node_id: str):
+    return db.query(models.Instance).filter(
+        models.Instance.node_id == node_id,
+        models.Instance.status.in_(["PROVISIONING", "RUNNING"])
+    ).count()
 
 def get_instances(db: Session):
     return db.query(models.Instance).all()

@@ -32,3 +32,17 @@ def remove_instance(db: Session, instance_id: str):
         db.delete(db_instance)
         db.commit()
     return True
+
+def get_config(db: Session, key: str, default: str = None):
+    conf = db.query(models.AgentConfig).filter(models.AgentConfig.key == key).first()
+    return conf.value if conf else default
+
+def set_config(db: Session, key: str, value: str):
+    conf = db.query(models.AgentConfig).filter(models.AgentConfig.key == key).first()
+    if conf:
+        conf.value = value
+    else:
+        conf = models.AgentConfig(key=key, value=value)
+        db.add(conf)
+    db.commit()
+    return conf

@@ -13,3 +13,9 @@ class LocalInstance(Base):
     save_path = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class AgentConfig(Base):
+    __tablename__ = "agent_config"
+
+    key = Column(String, primary_key=True)
+    value = Column(String)

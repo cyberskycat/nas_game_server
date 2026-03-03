@@ -29,6 +29,7 @@ services:
     environment:
       - CENTER_URL=http://center:8123
       - AGENT_IP=192.168.1.38 # 修改为 NAS 的真实 IP
+      - MAX_GAME_INSTANCES=3
     depends_on:
       - center
     restart: unless-stopped
@@ -47,6 +48,7 @@ services:
     environment:
       - CENTER_URL=http://center:8123
       - AGENT_IP=192.168.1.38 # 修改为 NAS 的真实 IP
+      - MAX_GAME_INSTANCES=3
     depends_on:
       - center
     restart: unless-stopped

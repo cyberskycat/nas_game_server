@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Card, Row, Col, Statistic, Table, Tag, Progress, Space, Typography, Badge } from 'antd';
-import { Cpu, Database as Ram, Server, Activity, Globe, HardDrive } from 'lucide-react';
+import { Layout, Card, Row, Col, Statistic, Table, Tag, Progress, Space, Typography, Badge, InputNumber, Button, message } from 'antd';
+import { Cpu, Database as Ram, Server, Activity, Globe, HardDrive, Settings } from 'lucide-react';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 
@@ -10,6 +10,28 @@ const { Title, Text } = Typography;
 const App: React.FC = () => {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [maxInstances, setMaxInstances] = useState<number>(3);
+  const [savingConfig, setSavingConfig] = useState(false);
+
+  const fetchConfig = async () => {
+    try {
+      const resp = await axios.get('/api/config');
+      setMaxInstances(resp.data.max_game_instances);
+    } catch(e) {}
+  };
+
+  const handleSaveConfig = async () => {
+    setSavingConfig(true);
+    try {
+      await axios.put('/api/config', { max_game_instances: maxInstances });
+      message.success('配置已保存 (Configuration saved)');
+      fetchConfig();
+    } catch(e) {
+      message.error('保存失败 (Failed to save)');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
 
   const fetchStatus = async () => {
     try {
@@ -23,6 +45,7 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    fetchConfig();
     fetchStatus();
     const interval = setInterval(fetchStatus, 3000);
     return () => clearInterval(interval);
@@ -112,6 +135,24 @@ const App: React.FC = () => {
               <Card style={{ marginTop: '24px' }} className="glass-card" title="QUICK STATS">
                 <Statistic title="Total Runtime" value="14d 06h 11m" valueStyle={{ fontSize: '16px' }} />
                 <Statistic title="Data Synced" value="1.4 GB" valueStyle={{ fontSize: '16px' }} style={{ marginTop: '15px' }} />
+              </Card>
+
+              <Card style={{ marginTop: '24px' }} className="glass-card" title={<Space><Settings size={18} /> NODE CONFIGURATION</Space>}>
+                <div style={{ padding: '10px 0' }}>
+                  <Text style={{ display: 'block', marginBottom: '8px', color: 'rgba(255,255,255,0.85)' }}>Max Game Instances (最大游戏实例数)</Text>
+                  <Space>
+                    <InputNumber 
+                      min={1} 
+                      max={100} 
+                      value={maxInstances} 
+                      onChange={(val) => setMaxInstances(val || 3)} 
+                      style={{ width: '120px' }}
+                    />
+                    <Button type="primary" loading={savingConfig} onClick={handleSaveConfig}>
+                      Save Config
+                    </Button>
+                  </Space>
+                </div>
               </Card>
             </Col>
           </Row>
