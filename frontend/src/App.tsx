@@ -104,6 +104,7 @@ const App: React.FC = () => {
       return node ? `${node.hostname} (${node.ip})` : nodeId;
     }},
     { title: 'Status', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={status === 'RUNNING' ? 'green' : 'orange'}>{status}</Tag> },
+    { title: 'Connection Details', dataIndex: 'details', key: 'details', render: (text: string) => text ? <Text copyable type="secondary" style={{ fontSize: '12px' }}>{text}</Text> : '-' },
     { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
       <Button type="link" danger size="small" onClick={() => handleStop(record.id)}>Stop</Button>
     )},

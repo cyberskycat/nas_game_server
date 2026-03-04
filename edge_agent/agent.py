@@ -361,20 +361,47 @@ def deploy_container(payload):
 
     cmd = ["docker", "run", "-d", "--name", f"game-{instance_id}"]
     if game_type == "minecraft": cmd.extend(["-p", "25565", "--workdir", "/data"])
+    else: cmd.extend(["-P"]) # Publish all exposed ports for testing dynamically
+    
     for k, v in env_vars.items(): cmd.extend(["-e", f"{k}={v}"])
     if save_path: cmd.extend(["-v", f"{local_volume}:/data"])
     cmd.append(image)
-    if game_type == "minecraft": cmd.extend(["java", "-Xmx4G", "-Xms1G", "-jar", rel_jar_path, "--nogui"])
+    if game_type == "minecraft" and jar_file: cmd.extend(["java", "-Xmx4G", "-Xms1G", "-jar", rel_jar_path, "--nogui"])
     
     try:
         subprocess.run(cmd, check=True)
         # Fetch the dynamically allocated host port
         port_details = ""
         try:
-            p_res = subprocess.run(["docker", "port", f"game-{instance_id}", "25565"], capture_output=True, text=True)
+            p_res = subprocess.run(["docker", "port", f"game-{instance_id}"], capture_output=True, text=True)
             if p_res.returncode == 0 and p_res.stdout.strip():
                 mapped_port = p_res.stdout.strip().split("\n")[0].split(":")[-1]
-                port_details = f"Minecraft Port: {mapped_port}"
+                port_details = f"Container Port: {mapped_port}"
+                
+                # Try to setup FRP if env vars exist
+                frp_server = os.getenv("FRP_SERVER_ADDR")
+                frp_port = os.getenv("FRP_SERVER_PORT")
+                if frp_server and frp_port:
+                    import random
+                    remote_port = random.randint(35000, 36000)
+                    frp_token = os.getenv("FRP_TOKEN", "")
+                    
+                    frpc_ini_path = os.path.join(local_volume, "frpc.ini")
+                    with open(frpc_ini_path, "w") as f:
+                        f.write(f"[common]\nserver_addr = {frp_server}\nserver_port = {frp_port}\n")
+                        if frp_token:
+                            f.write(f"token = {frp_token}\n")
+                        f.write(f"\n[mc_{instance_id}]\ntype = tcp\nlocal_ip = 172.17.0.1\nlocal_port = {mapped_port}\nremote_port = {remote_port}\n")
+                    
+                    frp_cmd = [
+                        "/usr/bin/frpc", "-c", frpc_ini_path
+                    ]
+                    try:
+                        # Start in background, don't wait for completion
+                        subprocess.Popen(frp_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                        port_details += f" | FRP Public: {frp_server}:{remote_port}"
+                    except Exception as fe:
+                        print(f"Failed to start FRP binary: {fe}")
         except: pass
         
         db = database.get_db()
@@ -393,6 +420,11 @@ def stop_container(payload):
     try:
         subprocess.run(["docker", "stop", container_name], check=False)
         subprocess.run(["docker", "rm", container_name], check=False)
+        
+        # Cleanup FRP binary process if it exists for this instance
+        frpc_ini_pattern = f"{instance_id}/frpc.ini"
+        subprocess.run(["pkill", "-f", f"frpc -c .*{frpc_ini_pattern}"], check=False)
+        
         if save_path: sync_save(save_path, local_volume, "upload")
         
         # Remove from local DB or update status

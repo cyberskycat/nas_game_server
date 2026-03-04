@@ -11,8 +11,15 @@ RUN apt-get update && apt-get install -y \
     && echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
-    && apt-get update && apt-get install -y docker-ce-cli \
+    && apt-get update && apt-get install -y docker-ce-cli wget procps \
     && rm -rf /var/lib/apt/lists/*
+
+# 下载并安装 frpc
+RUN wget https://github.com/fatedier/frp/releases/download/v0.54.0/frp_0.54.0_linux_amd64.tar.gz \
+    && tar -zxvf frp_0.54.0_linux_amd64.tar.gz \
+    && mv frp_0.54.0_linux_amd64/frpc /usr/bin/frpc \
+    && chmod +x /usr/bin/frpc \
+    && rm -rf frp_0.54.0_linux_amd64.tar.gz frp_0.54.0_linux_amd64
 
 WORKDIR /app
 

@@ -32,25 +32,28 @@ services:
       - CENTER_URL=http://center:8123
       - AGENT_IP=192.168.1.38 # 修改为 NAS 的真实 IP
       - MAX_GAME_INSTANCES=3
+      - FRP_SERVER_ADDR=1.1.1.1 # Mock API Address for FRP Server
+      - FRP_SERVER_PORT=7000
+      - FRP_TOKEN=Abcd1234
     depends_on:
       - center
     restart: unless-stopped
 
-  agent2:
-    build:
-      context: .
-      dockerfile: edge_agent/Dockerfile
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /tmp/edge_agent_data:/tmp/edge_agent_data
-      - ./agent2_data:/app/data
-      - /tmp/game_saves:/tmp/game_saves
-    ports:
-      - "8002:8001"
-    environment:
-      - CENTER_URL=http://center:8123
-      - AGENT_IP=192.168.1.38 # 修改为 NAS 的真实 IP
-      - MAX_GAME_INSTANCES=3
-    depends_on:
-      - center
-    restart: unless-stopped
+  # agent2:
+  #   build:
+  #     context: .
+  #     dockerfile: edge_agent/Dockerfile
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - /tmp/edge_agent_data:/tmp/edge_agent_data
+  #     - ./agent2_data:/app/data
+  #     - /tmp/game_saves:/tmp/game_saves
+  #   ports:
+  #     - "8002:8001"
+  #   environment:
+  #     - CENTER_URL=http://center:8123
+  #     - AGENT_IP=192.168.1.38 # 修改为 NAS 的真实 IP
+  #     - MAX_GAME_INSTANCES=3
+  #   depends_on:
+  #     - center
+  #   restart: unless-stopped
