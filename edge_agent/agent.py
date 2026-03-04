@@ -10,8 +10,9 @@ import subprocess
 import shutil
 import zipfile
 import threading
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Security
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import uvicorn
 
@@ -51,6 +52,30 @@ def save_node_id(node_id):
     # No longer needed as ID is derived, but keep for compatibility if needed
     pass
 
+security = HTTPBearer()
+
+def get_or_create_api_token():
+    token_path = "/app/data/api_token.txt"
+    env_token = os.environ.get("AGENT_API_TOKEN")
+    if env_token:
+        return env_token
+    if os.path.exists(token_path):
+        with open(token_path, "r") as f:
+            return f.read().strip()
+    new_token = str(uuid.uuid4())
+    os.makedirs(os.path.dirname(token_path), exist_ok=True)
+    with open(token_path, "w") as f:
+        f.write(new_token)
+    print(f"Generated new API Token: {new_token}")
+    return new_token
+
+API_TOKEN = get_or_create_api_token()
+
+def verify_api_token(credentials: HTTPAuthorizationCredentials = Security(security)):
+    if credentials.credentials != API_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid API Token")
+    return credentials.credentials
+
 def get_system_stats():
     db = database.get_db()
     try:
@@ -78,7 +103,7 @@ async def get_config():
         db.close()
 
 @api_router.put("/config")
-async def update_config(config: ConfigUpdate):
+async def update_config(config: ConfigUpdate, token: str = Depends(verify_api_token)):
     db = database.get_db()
     try:
         repository.set_config(db, "max_game_instances", str(config.max_game_instances))
@@ -131,6 +156,20 @@ def register():
     if not ip:
         try: ip = socket.gethostbyname(hostname)
         except: ip = "127.0.0.1"
+            
+    # TOFU: Trust On First Use for Center Public Key
+    center_pub_path = "/app/data/center_pub.pem"
+    if not os.path.exists(center_pub_path):
+        try:
+            print(f"Fetching public key from Center {CENTER_URL}...")
+            key_resp = requests.get(f"{CENTER_URL}/api/public_key", timeout=5)
+            key_resp.raise_for_status()
+            with open(center_pub_path, "w") as f:
+                f.write(key_resp.json()["public_key"])
+            print("Successfully saved Center public key (TOFU).")
+        except Exception as e:
+            print(f"Failed to fetch Center public key: {e}")
+            return None
             
     stats = get_system_stats()
     public_key = crypto_utils.get_public_key_pem()
@@ -418,6 +457,22 @@ def heartbeat_loop():
                     print("Node ID not found on Center, re-registering...")
                     CURRENT_NODE_ID = register()
                 else:
+                    center_sig = resp.headers.get("X-Center-Signature") or resp.headers.get("x-center-signature")
+                    if center_sig:
+                        try:
+                            with open("/app/data/center_pub.pem", "r") as f:
+                                center_pub = f.read()
+                            is_valid, msg = crypto_utils.verify_signature(resp.json(), center_sig, center_pub)
+                            if not is_valid:
+                                print(f"WARNING: Center signature validation failed: {msg}. Dropping tasks.")
+                                continue
+                        except Exception as e:
+                            print(f"WARNING: Error validating Center signature: {e}. Dropping tasks.")
+                            continue
+                    else:
+                        print("WARNING: Missing X-Center-Signature from Center. Dropping tasks.")
+                        continue
+                        
                     data = resp.json()
                     tasks = data.get("tasks", [])
                     handle_tasks(tasks)

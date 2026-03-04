@@ -11,7 +11,9 @@ services:
       - S3_PATH_PREFIX=instances
     # Add volume if persistent DB needed, but current center uses in-memory for some parts.
     # However, game_saves is mapped to /tmp/game_saves in center code too.
+    # However, game_saves is mapped to /tmp/game_saves in center code too.
     volumes:
+      - ./center_data:/app/data
       - /tmp/game_saves:/tmp/game_saves
     restart: unless-stopped
 

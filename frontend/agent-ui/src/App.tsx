@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Card, Row, Col, Statistic, Table, Tag, Progress, Space, Typography, Badge, InputNumber, Button, message } from 'antd';
+import { Layout, Card, Row, Col, Statistic, Table, Tag, Progress, Space, Typography, Badge, InputNumber, Input, Button, message } from 'antd';
 import { Cpu, Database as Ram, Server, Activity, Globe, HardDrive, Settings } from 'lucide-react';
 import { motion } from 'framer-motion';
 import axios from 'axios';
@@ -12,6 +12,7 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [maxInstances, setMaxInstances] = useState<number>(3);
   const [savingConfig, setSavingConfig] = useState(false);
+  const [apiToken, setApiToken] = useState<string>(localStorage.getItem('agent_api_token') || '');
 
   const fetchConfig = async () => {
     try {
@@ -23,7 +24,10 @@ const App: React.FC = () => {
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
-      await axios.put('/api/config', { max_game_instances: maxInstances });
+      localStorage.setItem('agent_api_token', apiToken);
+      await axios.put('/api/config', { max_game_instances: maxInstances }, {
+        headers: { Authorization: `Bearer ${apiToken}` }
+      });
       message.success('配置已保存 (Configuration saved)');
       fetchConfig();
     } catch(e) {
@@ -139,10 +143,17 @@ const App: React.FC = () => {
 
               <Card style={{ marginTop: '24px' }} className="glass-card" title={<Space><Settings size={18} /> NODE CONFIGURATION</Space>}>
                 <div style={{ padding: '10px 0' }}>
+                  <Text style={{ display: 'block', marginBottom: '8px', color: 'rgba(255,255,255,0.85)' }}>API Token (Authentication)</Text>
+                  <Input.Password 
+                    placeholder="Enter Agent API Token" 
+                    value={apiToken}
+                    onChange={(e) => setApiToken(e.target.value)}
+                    style={{ marginBottom: '16px' }}
+                  />
                   <Text style={{ display: 'block', marginBottom: '8px', color: 'rgba(255,255,255,0.85)' }}>Max Game Instances (最大游戏实例数)</Text>
                   <Space>
                     <InputNumber 
-                      min={1} 
+                      min={1}  
                       max={100} 
                       value={maxInstances} 
                       onChange={(val) => setMaxInstances(val || 3)} 

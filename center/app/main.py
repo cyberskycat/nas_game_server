@@ -6,15 +6,31 @@ from datetime import datetime
 import os
 
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from . import schemas, repository, database, crypto_utils
 
 app = FastAPI(title="Game Server Edge Platform - Center")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Center-Signature", "X-Center-Timestamp"]
+)
+
 api_router = APIRouter(prefix="/api")
 
 # Initialize Database
 @app.on_event("startup")
 def on_startup():
+    crypto_utils.ensure_keys_exist()
     database.init_db()
+
+@api_router.get("/public_key")
+async def get_public_key():
+    return {"public_key": crypto_utils.get_public_key_pem()}
 
 @api_router.post("/nodes/register", response_model=schemas.Node)
 async def register_node(data: schemas.NodeRegister, db: Session = Depends(database.get_db)):
@@ -67,7 +83,17 @@ async def heartbeat(
     repository.update_node_heartbeat(db, node_id, load_avg, running_instances, resources)
     tasks = repository.get_pending_tasks(db, node_id)
     
-    return {"status": "OK", "tasks": [schemas.Task.from_orm(t) for t in tasks]}
+    response_payload = {"status": "OK", "tasks": [{"type": t.type, "payload": t.payload} for t in tasks]}
+    signature, timestamp = crypto_utils.sign_payload(response_payload)
+    
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content=response_payload,
+        headers={
+            "X-Center-Signature": signature,
+            "X-Center-Timestamp": str(timestamp)
+        }
+    )
 
 @api_router.post("/nodes/{node_id}/status")
 async def update_node_status(

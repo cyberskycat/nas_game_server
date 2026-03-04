@@ -6,8 +6,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # Path to local key files
-PRIVATE_KEY_PATH = "/app/data/node.key"
-PUBLIC_KEY_PATH = "/app/data/node_pub.pem"
+PRIVATE_KEY_PATH = "/app/data/center.key"
+PUBLIC_KEY_PATH = "/app/data/center_pub.pem"
 
 def ensure_keys_exist():
     """保证密钥对存在，不存在则生成"""
