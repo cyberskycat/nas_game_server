@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException, Body, APIRouter, Depends, Header
+from fastapi import FastAPI, HTTPException, Body, APIRouter, Depends, Header, File, Form, UploadFile
 from sqlalchemy.orm import Session
 from typing import List, Dict, Optional
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 import os
+import asyncio
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,9 +25,43 @@ api_router = APIRouter(prefix="/api")
 
 # Initialize Database
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
     crypto_utils.ensure_keys_exist()
     database.init_db()
+    asyncio.create_task(s3_cleanup_loop())
+
+async def s3_cleanup_loop():
+    from .config import S3_ENABLED, UPLOAD_RETENTION_MINUTES
+    from . import s3_utils
+    
+    if not S3_ENABLED:
+        return
+        
+    print(f"Started S3 background cleanup loop (Retention: {UPLOAD_RETENTION_MINUTES}m)")
+    while True:
+        try:
+            db_generator = database.get_db()
+            db = next(db_generator)
+            try:
+                instances = repository.get_instances(db)
+                running_instances = [i for i in instances if i.status == "RUNNING" and i.save_path and i.save_path.startswith("s3://")]
+                
+                for inst in running_instances:
+                    last_modified = s3_utils.get_s3_file_last_modified(inst.save_path)
+                    if last_modified:
+                        # last_modified is a datetime object, usually timezone-aware from boto3
+                        now = datetime.now(timezone.utc)
+                        diff_minutes = (now - last_modified).total_seconds() / 60.0
+                        
+                        if diff_minutes > UPLOAD_RETENTION_MINUTES:
+                            print(f"Instance {inst.id} S3 file is {diff_minutes:.1f}m old (>{UPLOAD_RETENTION_MINUTES}m). Deleting...")
+                            s3_utils.delete_s3_file(inst.save_path)
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"Error in S3 cleanup loop: {e}")
+            
+        await asyncio.sleep(300) # Run every 5 minutes
 
 @api_router.get("/public_key")
 async def get_public_key():
@@ -118,9 +153,14 @@ async def update_node_status(
     return {"status": "UPDATED"}
 
 @api_router.post("/games/deploy")
-async def deploy_game(fmt: schemas.DeployRequest, db: Session = Depends(database.get_db)):
-    node_id = fmt.node_id
-    
+def deploy_game(
+    game_type: str = Form(...),
+    owner_id: str = Form("local_user"),
+    node_id: Optional[str] = Form(None),
+    save_path: Optional[str] = Form(None),
+    archive: Optional[UploadFile] = File(None),
+    db: Session = Depends(database.get_db)
+):
     def can_deploy(n):
         max_instances = 3
         if n.resources and "max_game_instances" in n.resources:
@@ -163,26 +203,75 @@ async def deploy_game(fmt: schemas.DeployRequest, db: Session = Depends(database
     except (ImportError, ValueError):
         S3_ENABLED, S3_BUCKET, S3_PATH_PREFIX = False, "game-saves", "instances"
 
-    if fmt.save_path:
-        save_path = fmt.save_path
-    elif S3_ENABLED:
-        save_path = f"s3://{S3_BUCKET}/{S3_PATH_PREFIX}/{instance_id}.zip"
-    else:
-        save_path = f"local://tmp/game_saves/{instance_id}.zip"
+    final_save_path = save_path
+    
+    # Process uploaded file if provided
+    if archive and archive.filename:
+        if not S3_ENABLED:
+            raise HTTPException(status_code=400, detail="S3 is not enabled but archive was uploaded")
+            
+        temp_file_path = f"/tmp/{instance_id}_{archive.filename}"
+        try:
+            with open(temp_file_path, "wb") as buffer:
+                import shutil
+                shutil.copyfileobj(archive.file, buffer)
+            
+            s3_key = f"{S3_PATH_PREFIX}/{instance_id}.zip"
+            from . import s3_utils
+            success = s3_utils.upload_s3_raw_file(temp_file_path, s3_key)
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to upload archive to S3")
+                
+            final_save_path = f"s3://{S3_BUCKET}/{s3_key}"
+        finally:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+    # Check default paths if no explicitly uploaded file or path
+    elif not final_save_path:
+        if S3_ENABLED:
+            final_save_path = f"s3://{S3_BUCKET}/{S3_PATH_PREFIX}/{instance_id}.zip"
+        else:
+            final_save_path = f"local://tmp/game_saves/{instance_id}.zip"
 
     # Persist instance
-    repository.create_instance(db, instance_id, node_id, fmt.game_type, fmt.owner_id, save_path)
+    repository.create_instance(db, instance_id, node_id, game_type, owner_id, final_save_path)
     
+    download_url = None
+    if final_save_path and final_save_path.startswith("s3://"):
+        from . import s3_utils
+        download_url = s3_utils.generate_presigned_url(final_save_path, method="get_object")
+        print(f"Generated download URL for DEPLOY task: {final_save_path}")
+
     # Queue task for agent
     task_payload = {
         "instance_id": instance_id,
-        "game_type": fmt.game_type,
+        "game_type": game_type,
         "env": {"INSTANCE_ID": instance_id, "EULA": "TRUE"},
-        "save_path": save_path
+        "save_path": final_save_path,
+        "download_url": download_url
     }
     repository.add_task(db, node_id, "DEPLOY", task_payload)
     
     return {"instance_id": instance_id, "node_id": node_id, "status": "QUEUED"}
+
+@api_router.get("/instances/{instance_id}/backup_ticket")
+def get_backup_ticket(instance_id: str, db: Session = Depends(database.get_db)):
+    db_instance = repository.get_instance(db, instance_id)
+    if not db_instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+        
+    from .config import S3_ENABLED, S3_BUCKET
+    if not S3_ENABLED:
+        raise HTTPException(status_code=400, detail="S3 is disabled")
+        
+    remote_path = f"s3://{S3_BUCKET}/game_saved/{instance_id}.zip"
+    from . import s3_utils
+    upload_url = s3_utils.generate_presigned_url(remote_path, method="put_object", expires_in=3600)
+    
+    repository.update_instance_save_path(db, instance_id, remote_path)
+    print(f"Issued backup ticket for {instance_id} -> {remote_path}")
+    
+    return {"upload_url": upload_url, "remote_path": remote_path}
 
 @api_router.get("/instances", response_model=List[schemas.Instance])
 async def list_instances(db: Session = Depends(database.get_db)):

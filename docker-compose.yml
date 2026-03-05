@@ -8,9 +8,8 @@ services:
     environment:
       - S3_ENABLED=True
       - S3_BUCKET=nasgamecenter
-      - S3_PATH_PREFIX=instances
+      - S3_PATH_PREFIX=game_upload
     # Add volume if persistent DB needed, but current center uses in-memory for some parts.
-    # However, game_saves is mapped to /tmp/game_saves in center code too.
     # However, game_saves is mapped to /tmp/game_saves in center code too.
     volumes:
       - ./center_data:/app/data
@@ -32,9 +31,9 @@ services:
       - CENTER_URL=http://center:8123
       - AGENT_IP=192.168.1.38 # 修改为 NAS 的真实 IP
       - MAX_GAME_INSTANCES=3
-      - FRP_SERVER_ADDR=1.1.1.1 # Mock API Address for FRP Server
-      - FRP_SERVER_PORT=7000
-      - FRP_TOKEN=Abcd1234
+      # - FRP_SERVER_ADDR=136.117.206.15 # Mock API Address for FRP Server
+      # - FRP_SERVER_PORT=7000
+      # - FRP_TOKEN=Abcd1234
     depends_on:
       - center
     restart: unless-stopped

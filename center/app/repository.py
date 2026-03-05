@@ -116,3 +116,10 @@ def get_pending_tasks(db: Session, node_id: str):
         t.consumed = 1
     db.commit()
     return tasks
+
+def update_instance_save_path(db: Session, instance_id: str, new_path: str):
+    instance = db.query(models.Instance).filter(models.Instance.id == instance_id).first()
+    if instance:
+        instance.save_path = new_path
+        db.commit()
+    return instance

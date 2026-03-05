@@ -14,12 +14,24 @@ export const getInstances = async () => {
   return response.data;
 };
 
-export const deployGame = async (gameType: string, ownerId: string, savePath?: string, nodeId?: string) => {
-  const response = await api.post('/games/deploy', {
-    game_type: gameType,
-    owner_id: ownerId,
-    save_path: savePath,
-    node_id: nodeId
+export const deployGame = async (
+  gameType: string, 
+  ownerId: string, 
+  savePath?: string, 
+  nodeId?: string, 
+  archive?: File,
+  onProgress?: (progressEvent: any) => void
+) => {
+  const formData = new FormData();
+  formData.append('game_type', gameType);
+  formData.append('owner_id', ownerId);
+  if (savePath) formData.append('save_path', savePath);
+  if (nodeId) formData.append('node_id', nodeId);
+  if (archive) formData.append('archive', archive);
+
+  const response = await api.post('/games/deploy', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: onProgress
   });
   return response.data;
 };

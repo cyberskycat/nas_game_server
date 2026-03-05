@@ -209,15 +209,45 @@ def update_center_status(instance_id, status, details=None):
         requests.post(f"{CENTER_URL}/api/instances/{instance_id}/status", json=payload)
     except: pass
 
-def sync_save(remote_path, local_path, direction="download"):
+def sync_save(remote_path, local_path, direction="download", presigned_url=None):
     print(f"sync_save: {direction} from {remote_path} to {local_path}")
-    if not download_s3_zip:
-        print("Error: s3_utils not imported correctly!")
-        return False
     try:
         if remote_path.startswith("s3://"):
-            if direction == "download": return download_s3_zip(remote_path, local_path)
-            else: return upload_s3_zip(local_path, remote_path)
+            tmp_zip = f"{local_path}.tmp.zip"
+            if direction == "download":
+                if not presigned_url:
+                    print("No presigned URL provided for download.")
+                    return False
+                print(f" Presigned URL : {presigned_url}")
+                print(f"Downloading from Presigned URL -> {tmp_zip}")
+                resp = requests.get(presigned_url, stream=True, timeout=120)
+                resp.raise_for_status()
+                os.makedirs(os.path.dirname(tmp_zip), exist_ok=True)
+                with open(tmp_zip, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=8192): f.write(chunk)
+                print(f"Extracting {tmp_zip} to {local_path}")
+                if os.path.exists(local_path): shutil.rmtree(local_path)
+                os.makedirs(local_path, exist_ok=True)
+                with zipfile.ZipFile(tmp_zip, 'r') as zip_ref: zip_ref.extractall(local_path)
+                os.remove(tmp_zip)
+                print("S3 download and extraction complete.")
+                return True
+            else:
+                if not presigned_url:
+                    print("No presigned URL provided for upload.")
+                    return False
+                os.makedirs(os.path.dirname(tmp_zip), exist_ok=True)
+                print(f"Compressing {local_path} -> {tmp_zip}")
+                with zipfile.ZipFile(tmp_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for root, dirs, files in os.walk(local_path):
+                        for file in files: zipf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), local_path))
+                print(f"Uploading to Presigned URL -> {remote_path}")
+                with open(tmp_zip, "rb") as f:
+                    resp = requests.put(presigned_url, data=f, timeout=300)
+                    resp.raise_for_status()
+                os.remove(tmp_zip)
+                print("S3 upload complete.")
+                return True
         elif remote_path.startswith("local://"):
             real_remote = remote_path.replace("local://", "/")
             if direction == "download":
@@ -275,8 +305,13 @@ def find_minecraft_jar(volume_path):
                     if "spigot" in name_lower: score += 80
                     if "purpur" in name_lower: score += 80
                     if "server" in name_lower: score += 50
+                    if "vanilla" in name_lower: score += 50
                     
-                    if score > 0:
+                    if depth == 0: score += 500
+                    elif depth == 1: score += 100
+                    
+                    if score > 0 or depth <= 1:
+                        if score == 0: score = 10
                         print(f"Found candidate: {f} (Size: {size}, Depth: {depth}, Score: {score})")
                         candidates.append((score, size, full_path))
                 except Exception as e:
@@ -314,7 +349,9 @@ deploy_lock = threading.Lock()
 
 def deploy_container(payload):
     global CURRENT_NODE_ID
-    instance_id, game_type, env_vars, save_path = payload["instance_id"], payload["game_type"], payload.get("env", {}), payload.get("save_path", "")
+    instance_id, game_type, env_vars = payload["instance_id"], payload["game_type"], payload.get("env", {})
+    save_path = payload.get("save_path", "")
+    download_url = payload.get("download_url", None)
     
     with deploy_lock:
         db = database.get_db()
@@ -339,7 +376,7 @@ def deploy_container(payload):
     image = "eclipse-temurin:21-jre-jammy" if game_type == "minecraft" else "nginx:alpine"
     local_volume = f"/tmp/edge_agent_data/{CURRENT_NODE_ID}/{instance_id}"
     if save_path:
-        if not sync_save(save_path, local_volume, "download"):
+        if not sync_save(save_path, local_volume, "download", presigned_url=download_url):
             set_failed("S3 backup sync failed")
             return False
     
@@ -358,15 +395,33 @@ def deploy_container(payload):
             
         rel_jar_path = os.path.relpath(jar_file, local_volume)
         print(f"Using JAR: {rel_jar_path}")
+        
+        jar_dir = os.path.dirname(rel_jar_path)
+        jar_name = os.path.basename(rel_jar_path)
+        workdir = f"/data/{jar_dir}" if jar_dir else "/data"
+        
+        server_port = "25565"
+        properties_file = os.path.join(local_volume, jar_dir, "server.properties")
+        if os.path.exists(properties_file):
+            try:
+                with open(properties_file, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("server-port="):
+                            server_port = line.split("=")[1].strip()
+                            print(f"Found custom server-port: {server_port}")
+                            break
+            except Exception as e:
+                print(f"Error reading server.properties: {e}")
 
     cmd = ["docker", "run", "-d", "--name", f"game-{instance_id}"]
-    if game_type == "minecraft": cmd.extend(["-p", "25565", "--workdir", "/data"])
+    if game_type == "minecraft": cmd.extend(["-p", server_port, "--workdir", workdir])
     else: cmd.extend(["-P"]) # Publish all exposed ports for testing dynamically
     
     for k, v in env_vars.items(): cmd.extend(["-e", f"{k}={v}"])
     if save_path: cmd.extend(["-v", f"{local_volume}:/data"])
     cmd.append(image)
-    if game_type == "minecraft" and jar_file: cmd.extend(["java", "-Xmx4G", "-Xms1G", "-jar", rel_jar_path, "--nogui"])
+    if game_type == "minecraft" and jar_file: cmd.extend(["java", "-Xmx4G", "-Xms1G", "-jar", jar_name, "--nogui"])
     
     try:
         subprocess.run(cmd, check=True)
@@ -402,6 +457,9 @@ def deploy_container(payload):
                         port_details += f" | FRP Public: {frp_server}:{remote_port}"
                     except Exception as fe:
                         print(f"Failed to start FRP binary: {fe}")
+                
+                if os.getenv("PLAYIT_SECRET_KEY"):
+                    port_details += " | Playit Tunnel Active (Check Dashboard)"
         except: pass
         
         db = database.get_db()
@@ -415,7 +473,7 @@ def deploy_container(payload):
         return False
 
 def stop_container(payload):
-    instance_id, save_path = payload["instance_id"], payload.get("save_path", "")
+    instance_id = payload["instance_id"]
     container_name, local_volume = f"game-{instance_id}", f"/tmp/edge_agent_data/{CURRENT_NODE_ID}/{instance_id}"
     try:
         subprocess.run(["docker", "stop", container_name], check=False)
@@ -425,7 +483,19 @@ def stop_container(payload):
         frpc_ini_pattern = f"{instance_id}/frpc.ini"
         subprocess.run(["pkill", "-f", f"frpc -c .*{frpc_ini_pattern}"], check=False)
         
-        if save_path: sync_save(save_path, local_volume, "upload")
+        # Request backup ticket from Center
+        try:
+            resp = requests.get(f"{CENTER_URL}/api/instances/{instance_id}/backup_ticket", timeout=10)
+            if resp.status_code == 200:
+                ticket_data = resp.json()
+                upload_url = ticket_data.get("upload_url")
+                remote_path = ticket_data.get("remote_path")
+                if upload_url and remote_path:
+                    sync_save(remote_path, local_volume, "upload", presigned_url=upload_url)
+            else:
+                print(f"Failed to get backup ticket: {resp.text}")
+        except Exception as api_e:
+            print(f"API Error fetching backup ticket: {api_e}")
         
         # Remove from local DB or update status
         db = database.get_db()
@@ -539,5 +609,17 @@ def startup_event():
     
     threading.Thread(target=heartbeat_loop, daemon=True).start()
 
+    playit_secret = os.getenv("PLAYIT_SECRET_KEY")
+    if playit_secret:
+        try:
+            print("Starting Playit.gg global daemon...")
+            subprocess.Popen(
+                ["/usr/bin/playit", "--secret", playit_secret],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+        except Exception as pe:
+            print(f"Failed to start Playit binary on startup: {pe}")
 if __name__ == "__main__":
     uvicorn.run("edge_agent.agent:app", host="0.0.0.0", port=8001)

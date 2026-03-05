@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Menu, Typography, Space, Card, Row, Col, Statistic, Table, Tag, Button, Progress, message, Modal, Form, Input, Select } from 'antd';
+import { Layout, Menu, Typography, Space, Card, Row, Col, Statistic, Table, Tag, Button, Progress, message, Modal, Form, Input, Select, Upload } from 'antd';
 import { 
   BarChart3, 
   Server, 
@@ -7,7 +7,8 @@ import {
   Activity, 
   Settings, 
   Terminal,
-  Plus
+  Plus,
+  UploadCloud
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { getNodes, getInstances, deployGame, stopGame } from './services/api';
@@ -20,6 +21,8 @@ const App: React.FC = () => {
   const [instances, setInstances] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
   const [form] = Form.useForm();
 
   const openDeployModal = (nodeId?: string) => {
@@ -53,13 +56,26 @@ const App: React.FC = () => {
 
   const handleDeploy = async (values: any) => {
     try {
-      await deployGame(values.game_type, values.owner_id, values.save_path, values.node_id);
+      const archiveFile = values.archive?.fileList ? values.archive.fileList[0]?.originFileObj : (values.archive?.[0]?.originFileObj || null);
+      if (archiveFile) {
+        setIsUploading(true);
+        setUploadProgress(0);
+      }
+      await deployGame(values.game_type, values.owner_id, values.save_path, values.node_id, archiveFile, (event: any) => {
+        if (event.total) {
+          const percent = Math.round((event.loaded * 100) / event.total);
+          setUploadProgress(percent);
+        }
+      });
       message.success('Deployment queued');
       setIsModalOpen(false);
       form.resetFields();
       fetchData();
     } catch (error) {
       message.error('Failed to deploy game');
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -75,7 +91,12 @@ const App: React.FC = () => {
 
   const nodeColumns = [
     { title: 'Status', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={status === 'ONLINE' ? 'success' : 'error'}>{status}</Tag> },
-    { title: 'Node Name', dataIndex: 'hostname', key: 'hostname' },
+    { title: 'Node ID & Host', dataIndex: 'id', key: 'id', render: (id: string, record: any) => (
+      <div>
+        <Text strong style={{ fontSize: '13px', display: 'block' }}>{id}</Text>
+        <Text type="secondary" style={{ fontSize: '12px' }}>Host: {record.hostname}</Text>
+      </div>
+    )},
     { title: 'IP', dataIndex: 'ip', key: 'ip' },
     { title: 'CPU Load', dataIndex: 'load_avg', key: 'load_avg', render: (val: number) => <Progress percent={Math.round((val || 0) * 100)} size="small" strokeColor="#1890ff" /> },
     { title: 'Instances / Max', dataIndex: 'running_instances', key: 'running_instances', render: (val: number, record: any) => {
@@ -101,7 +122,12 @@ const App: React.FC = () => {
     { title: 'Instance ID', dataIndex: 'id', key: 'id', ellipsis: true },
     { title: 'Node', dataIndex: 'node_id', key: 'node_id', ellipsis: true, render: (nodeId: string) => {
       const node = nodes.find(n => n.id === nodeId);
-      return node ? `${node.hostname} (${node.ip})` : nodeId;
+      return node ? (
+        <div>
+          <Text style={{ fontSize: '13px', display: 'block' }}>{nodeId}</Text>
+          <Text type="secondary" style={{ fontSize: '12px' }}>{node.hostname} ({node.ip})</Text>
+        </div>
+      ) : nodeId;
     }},
     { title: 'Status', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={status === 'RUNNING' ? 'green' : 'orange'}>{status}</Tag> },
     { title: 'Connection Details', dataIndex: 'details', key: 'details', render: (text: string) => text ? <Text copyable type="secondary" style={{ fontSize: '12px' }}>{text}</Text> : '-' },
@@ -158,7 +184,19 @@ const App: React.FC = () => {
         </Content>
       </Layout>
 
-      <Modal title="Deploy New Game Instance" open={isModalOpen} onCancel={() => setIsModalOpen(false)} onOk={() => form.submit()} okText="Deploy" className="glass-card">
+      <Modal 
+        title="Deploy New Game Instance" 
+        open={isModalOpen} 
+        onCancel={() => !isUploading && setIsModalOpen(false)} 
+        onOk={() => form.submit()} 
+        okText={isUploading ? "Uploading..." : "Deploy"} 
+        confirmLoading={isUploading}
+        okButtonProps={{ disabled: isUploading }}
+        cancelButtonProps={{ disabled: isUploading }}
+        closable={!isUploading}
+        maskClosable={!isUploading}
+        className="glass-card"
+      >
         <Form form={form} layout="vertical" onFinish={handleDeploy} preserve={false}>
           <Form.Item name="game_type" label="Game Type" rules={[{ required: true }]}>
             <Select placeholder="Pick a game engine" options={[{ value: 'minecraft', label: 'Minecraft (Java Paper)' }, { value: 'nginx', label: 'Nginx (Static/Web)' }]} />
@@ -179,6 +217,28 @@ const App: React.FC = () => {
           <Form.Item name="save_path" label="S3 Archive Path (Optional)">
             <Input placeholder="s3://bucket/path/to/archive.zip" />
           </Form.Item>
+          <Form.Item 
+            name="archive" 
+            label="Upload Local Archive (Optional)" 
+            valuePropName="fileList" 
+            getValueFromEvent={(e: any) => {
+              if (Array.isArray(e)) return e;
+              return e?.fileList;
+            }}
+          >
+            <Upload beforeUpload={() => false} maxCount={1} accept=".zip" disabled={isUploading}>
+              <Button icon={<UploadCloud size={16} />} disabled={isUploading}>Select Archive (.zip)</Button>
+            </Upload>
+          </Form.Item>
+          {isUploading && (
+            <div style={{ marginTop: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <Text type="secondary" style={{ fontSize: '13px' }}>{uploadProgress < 100 ? "Uploading to Center..." : "Building on Center..."}</Text>
+                <Text type="secondary" style={{ fontSize: '13px' }}>{uploadProgress}%</Text>
+              </div>
+              <Progress percent={uploadProgress} showInfo={false} status={uploadProgress === 100 ? "active" : "normal"} />
+            </div>
+          )}
         </Form>
       </Modal>
     </Layout>
