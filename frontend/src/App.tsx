@@ -8,10 +8,12 @@ import {
   Settings, 
   Terminal,
   Plus,
-  UploadCloud
+  UploadCloud,
+  History,
+  FileArchive
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { getNodes, getInstances, deployGame, stopGame } from './services/api';
+import { getNodes, getInstances, deployGame, stopGame, getUploadedFiles } from './services/api';
 
 const { Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -19,7 +21,9 @@ const { Title, Text } = Typography;
 const App: React.FC = () => {
   const [nodes, setNodes] = useState<any[]>([]);
   const [instances, setInstances] = useState<any[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedKey, setSelectedKey] = useState('1');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isUploading, setIsUploading] = useState<boolean>(false);
@@ -35,12 +39,14 @@ const App: React.FC = () => {
 
   const fetchData = async () => {
     try {
-      const [nodesData, instancesData] = await Promise.all([
+      const [nodesData, instancesData, uploadsData] = await Promise.all([
         getNodes(),
-        getInstances()
+        getInstances(),
+        getUploadedFiles()
       ]);
       setNodes(Object.values(nodesData));
       setInstances(Object.values(instancesData));
+      setUploadedFiles(uploadsData);
     } catch (error) {
       console.error('Failed to fetch data', error);
     } finally {
@@ -61,7 +67,7 @@ const App: React.FC = () => {
         setIsUploading(true);
         setUploadProgress(0);
       }
-      await deployGame(values.game_type, values.owner_id, values.save_path, values.node_id, archiveFile, (event: any) => {
+      await deployGame(values.game_type, values.owner_id, values.node_id, archiveFile, (event: any) => {
         if (event.total) {
           const percent = Math.round((event.loaded * 100) / event.total);
           setUploadProgress(percent);
@@ -136,6 +142,25 @@ const App: React.FC = () => {
     )},
   ];
 
+  const uploadColumns = [
+    { title: 'Filename', dataIndex: 'filename', key: 'filename', render: (text: string) => <Space><FileArchive size={14} />{text}</Space> },
+    { title: 'Game', dataIndex: 'game_type', key: 'game_type', render: (val: string) => <Tag color="blue">{val?.toUpperCase()}</Tag> },
+    { title: 'Size', dataIndex: 'file_size', key: 'file_size', render: (val: number) => (val / 1024 / 1024).toFixed(2) + ' MB' },
+    { title: 'Target Node', dataIndex: 'node_id', key: 'node_id', ellipsis: true },
+    { title: 'Instance ID', dataIndex: 'instance_id', key: 'instance_id', ellipsis: true },
+    { title: 'Created', dataIndex: 'created_at', key: 'created_at', render: (ts: string) => new Date(ts).toLocaleString() },
+    { 
+      title: 'Status', 
+      dataIndex: 'is_deleted', 
+      key: 'is_deleted', 
+      render: (deleted: number) => (
+        <Tag color={deleted ? 'default' : 'success'}>
+          {deleted ? 'Deleted from S3' : 'Active in S3'}
+        </Tag>
+      ) 
+    },
+  ];
+
   return (
     <Layout style={{ minHeight: '100vh', background: 'transparent' }}>
       <Sider width={240} className="glass-card" style={{ margin: '16px', height: 'calc(100vh - 32px)' }}>
@@ -146,10 +171,12 @@ const App: React.FC = () => {
         <Menu
           theme="dark"
           mode="inline"
-          defaultSelectedKeys={['1']}
+          selectedKeys={[selectedKey]}
+          onClick={({ key }) => setSelectedKey(key)}
           style={{ background: 'transparent', border: 'none' }}
           items={[
             { key: '1', icon: <BarChart3 size={18} />, label: 'Dashboard' },
+            { key: '6', icon: <History size={18} />, label: 'Upload History' },
             { key: '2', icon: <Server size={18} />, label: 'Infrastructure' },
             { key: '3', icon: <Gamepad2 size={18} />, label: 'Active Games' },
             { key: '4', icon: <Terminal size={18} />, label: 'System Logs' },
@@ -160,27 +187,58 @@ const App: React.FC = () => {
       
       <Layout style={{ background: 'transparent' }}>
         <Content style={{ padding: '24px', overflowY: 'auto' }}>
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <Title level={2} style={{ margin: 0 }}>Cluster Overview</Title>
-              <Button type="primary" icon={<Plus size={16} />} onClick={() => openDeployModal()}>Deploy New Game</Button>
-            </div>
-            
-            <Row gutter={[16, 16]}>
-              <Col span={6}><Card className="glass-card"><Statistic title="Total Nodes" value={nodes.length} /></Card></Col>
-              <Col span={6}><Card className="glass-card"><Statistic title="Online Nodes" value={nodes.filter(n => n.status === 'ONLINE').length} /></Card></Col>
-              <Col span={6}><Card className="glass-card"><Statistic title="Running Games" value={instances.length} /></Card></Col>
-              <Col span={6}><Card className="glass-card"><Statistic title="Total Load" value={nodes.reduce((acc, n) => acc + (n.load_avg || 0), 0).toFixed(2)} suffix="Avg" /></Card></Col>
-            </Row>
+          {selectedKey === '1' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                <Title level={2} style={{ margin: 0 }}>Cluster Overview</Title>
+                <Button type="primary" icon={<Plus size={16} />} onClick={() => openDeployModal()}>Deploy New Game</Button>
+              </div>
+              
+              <Row gutter={[16, 16]}>
+                <Col span={6}><Card className="glass-card"><Statistic title="Total Nodes" value={nodes.length} /></Card></Col>
+                <Col span={6}><Card className="glass-card"><Statistic title="Online Nodes" value={nodes.filter(n => n.status === 'ONLINE').length} /></Card></Col>
+                <Col span={6}><Card className="glass-card"><Statistic title="Running Games" value={instances.length} /></Card></Col>
+                <Col span={6}><Card className="glass-card"><Statistic title="Total Load" value={nodes.reduce((acc, n) => acc + (n.load_avg || 0), 0).toFixed(2)} suffix="Avg" /></Card></Col>
+              </Row>
 
-            <Card style={{ marginTop: '24px' }} className="glass-card" title={<Space><Server size={18} /> Compute Nodes</Space>}>
-              <Table columns={nodeColumns} dataSource={nodes} rowKey="id" pagination={false} size="small" loading={loading} />
-            </Card>
+              <Card style={{ marginTop: '24px' }} className="glass-card" title={<Space><Server size={18} /> Compute Nodes</Space>}>
+                <Table columns={nodeColumns} dataSource={nodes} rowKey="id" pagination={false} size="small" loading={loading} />
+              </Card>
 
-            <Card style={{ marginTop: '24px' }} className="glass-card" title={<Space><Gamepad2 size={18} /> Active Game Instances</Space>}>
-              <Table columns={instanceColumns} dataSource={instances} rowKey="id" pagination={false} size="small" loading={loading} />
-            </Card>
-          </motion.div>
+              <Card style={{ marginTop: '24px' }} className="glass-card" title={<Space><Gamepad2 size={18} /> Active Game Instances</Space>}>
+                <Table columns={instanceColumns} dataSource={instances} rowKey="id" pagination={false} size="small" loading={loading} />
+              </Card>
+            </motion.div>
+          )}
+
+          {selectedKey === '6' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <div style={{ marginBottom: '24px' }}>
+                <Title level={2} style={{ margin: 0 }}>Upload History</Title>
+                <Text type="secondary">Track and manage service archives uploaded via Center</Text>
+              </div>
+
+              <Card className="glass-card" title={<Space><History size={18} /> Uploaded Files Records (S3 Retention policy applied)</Space>}>
+                <Table 
+                  columns={uploadColumns} 
+                  dataSource={uploadedFiles} 
+                  rowKey="id" 
+                  size="small" 
+                  loading={loading}
+                  pagination={{ pageSize: 10 }}
+                />
+              </Card>
+            </motion.div>
+          )}
+
+          {['2', '3', '4', '5'].includes(selectedKey) && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+               <Card className="glass-card" style={{ textAlign: 'center', padding: '100px 0' }}>
+                 <Statistic title="Module Under Construction" value={selectedKey} prefix="Feature ID #" />
+                 <Text type="secondary">This section is coming soon as part of the phase 2 roadmap.</Text>
+               </Card>
+            </motion.div>
+          )}
         </Content>
       </Layout>
 
@@ -199,7 +257,7 @@ const App: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleDeploy} preserve={false}>
           <Form.Item name="game_type" label="Game Type" rules={[{ required: true }]}>
-            <Select placeholder="Pick a game engine" options={[{ value: 'minecraft', label: 'Minecraft (Java Paper)' }, { value: 'nginx', label: 'Nginx (Static/Web)' }]} />
+            <Select placeholder="Pick a game engine" options={[{ value: 'minecraft', label: 'Minecraft' }, { value: 'nginx', label: 'Nginx (Static/Web)' }]} />
           </Form.Item>
           <Form.Item name="node_id" label="Target Node (Optional)">
             <Select 
@@ -213,9 +271,6 @@ const App: React.FC = () => {
           </Form.Item>
           <Form.Item name="owner_id" label="Owner ID" rules={[{ required: true }]} initialValue="local_user">
             <Input />
-          </Form.Item>
-          <Form.Item name="save_path" label="S3 Archive Path (Optional)">
-            <Input placeholder="s3://bucket/path/to/archive.zip" />
           </Form.Item>
           <Form.Item 
             name="archive" 

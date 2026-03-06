@@ -17,7 +17,6 @@ export const getInstances = async () => {
 export const deployGame = async (
   gameType: string, 
   ownerId: string, 
-  savePath?: string, 
   nodeId?: string, 
   archive?: File,
   onProgress?: (progressEvent: any) => void
@@ -25,7 +24,6 @@ export const deployGame = async (
   const formData = new FormData();
   formData.append('game_type', gameType);
   formData.append('owner_id', ownerId);
-  if (savePath) formData.append('save_path', savePath);
   if (nodeId) formData.append('node_id', nodeId);
   if (archive) formData.append('archive', archive);
 
@@ -38,6 +36,11 @@ export const deployGame = async (
 
 export const stopGame = async (instanceId: string) => {
   const response = await api.post(`/games/${instanceId}/stop`);
+  return response.data;
+};
+
+export const getUploadedFiles = async () => {
+  const response = await api.get('/uploaded_files');
   return response.data;
 };
 

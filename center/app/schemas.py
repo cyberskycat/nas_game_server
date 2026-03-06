@@ -47,3 +47,17 @@ class Task(BaseModel):
 
     class Config:
         from_attributes = True
+
+class UploadedFile(BaseModel):
+    id: str
+    filename: str
+    s3_path: str
+    node_id: str
+    instance_id: str
+    file_size: int
+    game_type: str
+    created_at: datetime
+    is_deleted: int
+
+    class Config:
+        from_attributes = True

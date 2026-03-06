@@ -37,31 +37,34 @@ async def s3_cleanup_loop():
     if not S3_ENABLED:
         return
         
-    print(f"Started S3 background cleanup loop (Retention: {UPLOAD_RETENTION_MINUTES}m)")
+    print(f"Started DB-driven S3 background cleanup loop (Retention: {UPLOAD_RETENTION_MINUTES}m)")
     while True:
         try:
             db_generator = database.get_db()
             db = next(db_generator)
             try:
-                instances = repository.get_instances(db)
-                running_instances = [i for i in instances if i.status == "RUNNING" and i.save_path and i.save_path.startswith("s3://")]
-                
-                for inst in running_instances:
-                    last_modified = s3_utils.get_s3_file_last_modified(inst.save_path)
-                    if last_modified:
-                        # last_modified is a datetime object, usually timezone-aware from boto3
+                active_files = repository.get_active_uploaded_files(db)
+                for f in active_files:
+                    # Check if instance is RUNNING
+                    inst = repository.get_instance(db, f.instance_id)
+                    if inst and inst.status == "RUNNING":
+                        # Check age
                         now = datetime.now(timezone.utc)
-                        diff_minutes = (now - last_modified).total_seconds() / 60.0
+                        # Ensure created_at is aware
+                        created_at = f.created_at.replace(tzinfo=timezone.utc)
+                        diff_minutes = (now - created_at).total_seconds() / 60.0
                         
                         if diff_minutes > UPLOAD_RETENTION_MINUTES:
-                            print(f"Instance {inst.id} S3 file is {diff_minutes:.1f}m old (>{UPLOAD_RETENTION_MINUTES}m). Deleting...")
-                            s3_utils.delete_s3_file(inst.save_path)
+                            print(f"File {f.filename} ({f.id}) for instance {inst.id} is {diff_minutes:.1f}m old. Cleaning up S3...")
+                            if s3_utils.delete_s3_file(f.s3_path):
+                                repository.mark_uploaded_file_deleted(db, f.id)
             finally:
                 db.close()
         except Exception as e:
-            print(f"Error in S3 cleanup loop: {e}")
-            
-        await asyncio.sleep(300) # Run every 5 minutes
+            print(f"Error in s3_cleanup_loop: {e}")
+        
+        await asyncio.sleep(300) # Sleep 5 minutes
+        await asyncio.sleep(300) # Sleep 5 minutes
 
 @api_router.get("/public_key")
 async def get_public_key():
@@ -157,7 +160,6 @@ def deploy_game(
     game_type: str = Form(...),
     owner_id: str = Form("local_user"),
     node_id: Optional[str] = Form(None),
-    save_path: Optional[str] = Form(None),
     archive: Optional[UploadFile] = File(None),
     db: Session = Depends(database.get_db)
 ):
@@ -203,7 +205,7 @@ def deploy_game(
     except (ImportError, ValueError):
         S3_ENABLED, S3_BUCKET, S3_PATH_PREFIX = False, "game-saves", "instances"
 
-    final_save_path = save_path
+    final_save_path = None
     
     # Process uploaded file if provided
     if archive and archive.filename:
@@ -216,6 +218,7 @@ def deploy_game(
                 import shutil
                 shutil.copyfileobj(archive.file, buffer)
             
+            file_size = os.path.getsize(temp_file_path)
             s3_key = f"{S3_PATH_PREFIX}/{instance_id}.zip"
             from . import s3_utils
             success = s3_utils.upload_s3_raw_file(temp_file_path, s3_key)
@@ -223,6 +226,18 @@ def deploy_game(
                 raise HTTPException(status_code=500, detail="Failed to upload archive to S3")
                 
             final_save_path = f"s3://{S3_BUCKET}/{s3_key}"
+
+            # Register upload in DB
+            repository.create_uploaded_file(
+                db,
+                file_id=str(uuid.uuid4()),
+                filename=archive.filename,
+                s3_path=final_save_path,
+                node_id=node_id,
+                instance_id=instance_id,
+                file_size=file_size,
+                game_type=game_type
+            )
         finally:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
@@ -276,6 +291,10 @@ def get_backup_ticket(instance_id: str, db: Session = Depends(database.get_db)):
 @api_router.get("/instances", response_model=List[schemas.Instance])
 async def list_instances(db: Session = Depends(database.get_db)):
     return repository.get_instances(db)
+
+@api_router.get("/uploaded_files", response_model=List[schemas.UploadedFile])
+def list_uploaded_files(db: Session = Depends(database.get_db)):
+    return repository.get_uploaded_files(db)
 
 @api_router.post("/instances/{instance_id}/status")
 async def update_instance_status(

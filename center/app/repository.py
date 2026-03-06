@@ -123,3 +123,31 @@ def update_instance_save_path(db: Session, instance_id: str, new_path: str):
         instance.save_path = new_path
         db.commit()
     return instance
+
+def create_uploaded_file(db: Session, file_id: str, filename: str, s3_path: str, node_id: str, instance_id: str, file_size: int, game_type: str):
+    db_file = models.UploadedFile(
+        id=file_id,
+        filename=filename,
+        s3_path=s3_path,
+        node_id=node_id,
+        instance_id=instance_id,
+        file_size=file_size,
+        game_type=game_type
+    )
+    db.add(db_file)
+    db.commit()
+    db.refresh(db_file)
+    return db_file
+
+def get_active_uploaded_files(db: Session):
+    return db.query(models.UploadedFile).filter(models.UploadedFile.is_deleted == 0).all()
+
+def get_uploaded_files(db: Session):
+    return db.query(models.UploadedFile).order_by(models.UploadedFile.created_at.desc()).all()
+
+def mark_uploaded_file_deleted(db: Session, file_id: str):
+    db_file = db.query(models.UploadedFile).filter(models.UploadedFile.id == file_id).first()
+    if db_file:
+        db_file.is_deleted = 1
+        db.commit()
+    return db_file

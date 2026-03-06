@@ -39,3 +39,16 @@ class Task(Base):
     payload = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
     consumed = Column(Integer, default=0) # 0: pending, 1: consumed
+
+class UploadedFile(Base):
+    __tablename__ = "uploaded_files"
+
+    id = Column(String, primary_key=True, index=True)
+    filename = Column(String)
+    s3_path = Column(String)
+    node_id = Column(String, index=True)
+    instance_id = Column(String, index=True)
+    file_size = Column(Integer)
+    game_type = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_deleted = Column(Integer, default=0) # 0: False, 1: True for sqlite compat
